@@ -184,6 +184,9 @@ async def on_ready():
     print(f"We have logged in as {client.user}")
     client.loop.create_task(periodic_check())
 
+user_applied_internships = {}
+last_listed_internships = {}
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -198,42 +201,62 @@ async def on_message(message):
         print("Refresh completed")  # Debug
 
     elif message.content.startswith("!list"):
-        parts = message.content.split(maxsplit=1)  # Allow splitting into exactly two parts
+        print("!list command received")  # Debug
+        parts = message.content.split(maxsplit=1)
         if len(parts) != 2:
-            await message.channel.send("Please use the format: !list MMM DD (e.g., !list Dec 26)")
+            embed = discord.Embed(
+                title="❌ Invalid Command",
+                description="Please use the format: `!list MMM DD` (e.g., `!list Dec 26`)",
+                color=discord.Color.red()
+            )
+            await message.channel.send(embed=embed)
             return
-        
-        date_str = parts[1].strip().title()  # Normalize input to proper case
+
+        date_str = parts[1].strip().title()
+        print(f"Processing internships for {date_str}")  # Debug
+
         try:
-            # Try to parse the date in MMM DD format
             datetime.strptime(date_str, '%b %d')
-            
+            print(f"Valid date format: {date_str}")  # Debug
+
             await message.channel.send(f"🔍 Fetching internships posted on {date_str}...")
             internships = await fetch_internships(date_str)
-            
+
             if not internships:
-                print(f"No internships found for {date_str}")  # Debugging
-                await message.channel.send(f"No internships found for {date_str}")
+                print(f"No internships found for {date_str}")  # Debug
+                embed = discord.Embed(
+                    title="📅 No Internships Found",
+                    description=f"No internships found for {date_str}.",
+                    color=discord.Color.orange()
+                )
+                await message.channel.send(embed=embed)
                 return
-            
-            # Create a formatted message with the internships
-            response = f"📅 **Internships posted on {date_str}:**\n\n"
+
+            embed = discord.Embed(
+                title=f"📅 Internships Posted on {date_str}",
+                color=discord.Color.blue()
+            )
             for idx, internship in enumerate(internships, 1):
-                response += f"{idx}. **{internship['company']}**\n"
-                response += f"   💼 {internship['role']}\n"
-                response += f"   📍 {internship['location']}\n"
-                if internship['apply_link']:
-                    response += f"   🔗 [Apply Here]({internship['apply_link']})\n"
-                response += "\n"
-            
-            # Trim response if too long
-            if len(response) > 1900:
-                response = response[:1900] + "\n... (more results available but truncated for message limit)"
-            
-            await message.channel.send(response)
+                embed.add_field(
+                    name=f"{idx}. {internship['company']}",
+                    value=(
+                        f"**Role**: {internship['role']}\n"
+                        f"**Location**: {internship['location']}\n"
+                        f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship['apply_link'] else ''}"
+                    ),
+                    inline=False
+                )
+
+            await message.channel.send(embed=embed)
         
         except ValueError:
-            await message.channel.send("Invalid date format. Please use MMM DD format (e.g., Dec 26)")
+            print("Invalid date format")  # Debug
+            embed = discord.Embed(
+                title="❌ Invalid Date Format",
+                description="Please use the format `MMM DD` (e.g., `Dec 26`).",
+                color=discord.Color.red()
+            )
+            await message.channel.send(embed=embed)
 
 
     elif message.content.startswith("!setfilter"):
@@ -244,16 +267,94 @@ async def on_message(message):
         for emoji in JOB_TYPES.keys():
             await filter_message.add_reaction(emoji)
 
+    elif message.content.startswith("!help"):
+        embed = discord.Embed(
+            title="🤖 Bot Commands",
+            description="Here are the available commands:",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="🔄 `!refresh`",
+            value="Refresh the repository to check for changes.",
+            inline=False
+        )
+        embed.add_field(
+            name="📅 `!list [MMM DD]`",
+            value="List all activity during the specified date from the repository (e.g., `!list Dec 26`).",
+            inline=False
+        )
+        embed.add_field(
+            name="⚙️ `!setfilter`",
+            value="Set your preference for SWE or Finance updates by reacting to the bot's message.",
+            inline=False
+        )
+        await message.channel.send(embed=embed)
+
+    elif message.content.startswith("!plist"):
+        user_id = message.author.id
+        print(f"Fetching plist for user: {user_id}")  # Debugging
+        if user_id not in user_applied_internships or not user_applied_internships[user_id]:
+            print("No internships found in user's list")  # Debugging
+            await message.channel.send("🗒️ You haven't added any internships yet. Use `!list` and react to start adding!")
+            return
+
+        # Create an embed with the user's applied internships
+        embed = discord.Embed(
+            title=f"📋 Your Applied Internships",
+            color=discord.Color.green()
+        )
+        for idx, internship in enumerate(user_applied_internships[user_id], 1):
+         print(f"Internship {idx}: {internship}")  # Debugging
+        embed.add_field(
+            name=f"{idx}. {internship['company']}",
+            value=(
+                f"**Role**: {internship['role']}\n"
+                f"**Location**: {internship['location']}\n"
+                f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship['apply_link'] else ''}"
+            ),
+            inline=False
+        )
+        await message.channel.send(embed=embed)
+
+
 @client.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
 
+    print(f"Reaction added: {reaction.emoji}, Message ID: {reaction.message.id}")  # Debugging
+
+    message_id = reaction.message.id
     emoji = str(reaction.emoji)
-    if emoji in JOB_TYPES:
-        job_type = JOB_TYPES[emoji]
-        user_preferences[user.id] = job_type
-        await user.send(f"Preference set to {job_type} updates!")
+
+    # Ensure the reaction is on a tracked message
+    if message_id in last_listed_internships:
+        internships = last_listed_internships[message_id]
+
+        # Map emoji to index (e.g., :one: -> 0, :two: -> 1)
+        emoji_to_index = {
+            "1️⃣": 0, "2️⃣": 1, "3️⃣": 2, "4️⃣": 3, "5️⃣": 4,
+            "6️⃣": 5, "7️⃣": 6, "8️⃣": 7, "9️⃣": 8, "🔟": 9
+        }
+
+        if emoji in emoji_to_index:
+            idx = emoji_to_index[emoji]
+            print(f"Matched emoji to index: {idx}")  # Debugging
+            if 0 <= idx < len(internships):
+                internship = internships[idx]
+                user_id = user.id
+
+                # Add internship to the user's personal list
+                if user_id not in user_applied_internships:
+                    user_applied_internships[user_id] = []
+
+                if internship not in user_applied_internships[user_id]:
+                    user_applied_internships[user_id].append(internship)
+                    await user.send(f"✅ Added **{internship['company']}** to your applied internships list.")
+                else:
+                    await user.send(f"⚠️ **{internship['company']}** is already in your list.")
+        else:
+            print(f"Emoji not recognized: {emoji}")  # Debugging
 
 @client.event
 async def on_reaction_remove(reaction, user):
