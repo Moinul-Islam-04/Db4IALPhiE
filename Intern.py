@@ -33,6 +33,8 @@ intents.messages = True
 intents.message_content = True 
 client = discord.Client(intents=intents)
 
+
+
 async def fetch_internships(date_str=None):
     """
     Fetch internships from the README.md file
@@ -187,6 +189,9 @@ async def on_ready():
 user_applied_internships = {}
 last_listed_internships = {}
 
+print("Initial user_applied_internships:", user_applied_internships)
+print("Initial last_listed_internships:", last_listed_internships)
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -201,7 +206,6 @@ async def on_message(message):
         print("Refresh completed")  # Debug
 
     elif message.content.startswith("!list"):
-        print("!list command received")  # Debug
         parts = message.content.split(maxsplit=1)
         if len(parts) != 2:
             embed = discord.Embed(
@@ -213,17 +217,12 @@ async def on_message(message):
             return
 
         date_str = parts[1].strip().title()
-        print(f"Processing internships for {date_str}")  # Debug
-
         try:
             datetime.strptime(date_str, '%b %d')
-            print(f"Valid date format: {date_str}")  # Debug
-
             await message.channel.send(f"🔍 Fetching internships posted on {date_str}...")
             internships = await fetch_internships(date_str)
 
             if not internships:
-                print(f"No internships found for {date_str}")  # Debug
                 embed = discord.Embed(
                     title="📅 No Internships Found",
                     description=f"No internships found for {date_str}.",
@@ -236,9 +235,16 @@ async def on_message(message):
                 title=f"📅 Internships Posted on {date_str}",
                 color=discord.Color.blue()
             )
+            
+            # Add number emojis for reactions
+            number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+            
             for idx, internship in enumerate(internships, 1):
+                if idx > len(number_emojis):
+                    break
+                    
                 embed.add_field(
-                    name=f"{idx}. {internship['company']}",
+                    name=f"{number_emojis[idx-1]} {internship['company']}",
                     value=(
                         f"**Role**: {internship['role']}\n"
                         f"**Location**: {internship['location']}\n"
@@ -247,18 +253,16 @@ async def on_message(message):
                     inline=False
                 )
 
-            await message.channel.send(embed=embed)
-        
-        except ValueError:
-            print("Invalid date format")  # Debug
-            embed = discord.Embed(
-                title="❌ Invalid Date Format",
-                description="Please use the format `MMM DD` (e.g., `Dec 26`).",
-                color=discord.Color.red()
-            )
-            await message.channel.send(embed=embed)
-
-
+            sent_message = await message.channel.send(embed=embed)
+            
+            # Store the internships list for this message
+            last_listed_internships[sent_message.id] = internships
+            
+            # Add number reactions
+            for idx in range(min(len(internships), len(number_emojis))):
+                await sent_message.add_reaction(number_emojis[idx])
+        except Exception as e:
+            print(f"Error fetching Lists: {e}")
     elif message.content.startswith("!setfilter"):
         await message.channel.send(
             "React with 💻 for SWE updates or 💵 for Finance updates!"
@@ -288,32 +292,42 @@ async def on_message(message):
             value="Set your preference for SWE or Finance updates by reacting to the bot's message.",
             inline=False
         )
+        embed.add_field(
+            name="📅 `!plist`",
+            value="Show all internships user has applied to",
+            inline=False
+        )
+        
         await message.channel.send(embed=embed)
 
     elif message.content.startswith("!plist"):
-        user_id = message.author.id
-        print(f"Fetching plist for user: {user_id}")  # Debugging
+        user_id = str(message.author.id)
+        print(f"!plist command received for user_id: {user_id}")  # Debug
+        print(f"Current user_applied_internships: {user_applied_internships}")  # Debug
+        
         if user_id not in user_applied_internships or not user_applied_internships[user_id]:
-            print("No internships found in user's list")  # Debugging
+            print(f"No internships found for user {user_id}")  # Debug
             await message.channel.send("🗒️ You haven't added any internships yet. Use `!list` and react to start adding!")
             return
 
-        # Create an embed with the user's applied internships
         embed = discord.Embed(
-            title=f"📋 Your Applied Internships",
+            title="📋 Your Applied Internships",
             color=discord.Color.green()
         )
+        
+        print(f"User's internships: {user_applied_internships[user_id]}")  # Debug
+        
         for idx, internship in enumerate(user_applied_internships[user_id], 1):
-         print(f"Internship {idx}: {internship}")  # Debugging
-        embed.add_field(
-            name=f"{idx}. {internship['company']}",
-            value=(
-                f"**Role**: {internship['role']}\n"
-                f"**Location**: {internship['location']}\n"
-                f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship['apply_link'] else ''}"
-            ),
-            inline=False
-        )
+            embed.add_field(
+                name=f"{idx}. {internship['company']}",
+                value=(
+                    f"**Role**: {internship['role']}\n"
+                    f"**Location**: {internship['location']}\n"
+                    f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship['apply_link'] else ''}"
+                ),
+                inline=False
+            )
+        
         await message.channel.send(embed=embed)
 
 
@@ -322,40 +336,57 @@ async def on_reaction_add(reaction, user):
     if user.bot:
         return
 
-    print(f"Reaction added: {reaction.emoji}, Message ID: {reaction.message.id}")  # Debugging
-
     message_id = reaction.message.id
     emoji = str(reaction.emoji)
+    
+    print(f"\nReaction received - Message ID: {message_id}, Emoji: {emoji}")  # Debug
+    print(f"Available message IDs in last_listed_internships: {list(last_listed_internships.keys())}")  # Debug
 
-    # Ensure the reaction is on a tracked message
-    if message_id in last_listed_internships:
-        internships = last_listed_internships[message_id]
+    if message_id not in last_listed_internships:
+        print(f"Message ID {message_id} not found in last_listed_internships")  # Debug
+        return
 
-        # Map emoji to index (e.g., :one: -> 0, :two: -> 1)
-        emoji_to_index = {
-            "1️⃣": 0, "2️⃣": 1, "3️⃣": 2, "4️⃣": 3, "5️⃣": 4,
-            "6️⃣": 5, "7️⃣": 6, "8️⃣": 7, "9️⃣": 8, "🔟": 9
-        }
+    internships = last_listed_internships[message_id]
+    print(f"Found internships for message: {internships}")  # Debug
+    
+    emoji_to_index = {
+        "1️⃣": 0, "2️⃣": 1, "3️⃣": 2, "4️⃣": 3, "5️⃣": 4,
+        "6️⃣": 5, "7️⃣": 6, "8️⃣": 7, "9️⃣": 8, "🔟": 9
+    }
 
-        if emoji in emoji_to_index:
-            idx = emoji_to_index[emoji]
-            print(f"Matched emoji to index: {idx}")  # Debugging
-            if 0 <= idx < len(internships):
-                internship = internships[idx]
-                user_id = user.id
+    if emoji in emoji_to_index:
+        idx = emoji_to_index[emoji]
+        print(f"Emoji mapped to index: {idx}")  # Debug
+        
+        if 0 <= idx < len(internships):
+            internship = internships[idx]
+            user_id = str(user.id)
+            
+            print(f"Processing internship {internship['company']} for user {user_id}")  # Debug
+            print(f"Current user_applied_internships before adding: {user_applied_internships}")  # Debug
 
-                # Add internship to the user's personal list
-                if user_id not in user_applied_internships:
-                    user_applied_internships[user_id] = []
+            # Initialize user's list if it doesn't exist
+            if user_id not in user_applied_internships:
+                user_applied_internships[user_id] = []
+                print(f"Initialized new list for user {user_id}")  # Debug
 
-                if internship not in user_applied_internships[user_id]:
-                    user_applied_internships[user_id].append(internship)
-                    await user.send(f"✅ Added **{internship['company']}** to your applied internships list.")
-                else:
-                    await user.send(f"⚠️ **{internship['company']}** is already in your list.")
-        else:
-            print(f"Emoji not recognized: {emoji}")  # Debugging
+            # Check if internship is already in the list
+            existing_internship = next(
+                (item for item in user_applied_internships[user_id] 
+                 if item['company'] == internship['company'] and 
+                    item['role'] == internship['role']),
+                None
+            )
 
+            if not existing_internship:
+                user_applied_internships[user_id].append(internship.copy())  # Make a copy of the internship
+                print(f"Added internship to user's list. Updated data: {user_applied_internships[user_id]}")  # Debug
+                await user.send(f"✅ Added **{internship['company']}** to your applied internships list!")
+            else:
+                print(f"Internship already exists in user's list")  # Debug
+                await user.send(f"⚠️ **{internship['company']}** is already in your list!")
+            
+            print(f"Final user_applied_internships: {user_applied_internships}")  # Debug
 @client.event
 async def on_reaction_remove(reaction, user):
     if user.bot:
