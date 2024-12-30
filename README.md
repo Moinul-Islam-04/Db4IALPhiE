@@ -28,14 +28,13 @@ A Discord bot designed to help users track internship opportunities from reposit
      !list Dec 26
      ```
 
-2. **`!plist`** *(In Development)*
+2. **`!plist`** 
    - Shows a personal list of internships that the user has added.
 
 3. **`!help`**
    - Displays a list of available commands and their descriptions.
 
-### Adding Internships to Personal List (Coming Soon)
-- React to the list message with a number emoji (e.g., `1️⃣`, `2️⃣`) to add an internship to your personal list.
+
 
 ## Installation
 
@@ -67,9 +66,11 @@ A Discord bot designed to help users track internship opportunities from reposit
 - **Implemented:**
   - Listing internships for a specific date.
   - Displaying information in a clean, embedded format.
+  - Personal internship list feature (adding internships via emoji reactions and viewing them with `!plist`).
 
 - **In Progress:**
-  - Personal internship list feature (adding internships via emoji reactions and viewing them with `!plist`).
+  - Switch Repositories directly from Discord
+  - add Trackers for OA, Rejection, and Rounds
 
 ## Contributions
 Contributions are welcome! Feel free to open issues or submit pull requests for improvements or new features.
