@@ -12,7 +12,7 @@ A Discord bot designed to help users track internship opportunities from reposit
   - **Location**
   - **Application Link (if available)**
 
-### 2. **Personal Internship List (In Development)**
+### 2. **Personal Internship List**
 - Soon, users will be able to add internships to their personal list by reacting with number emojis (e.g., `1️⃣`, `2️⃣`) to the internship list.
 - Use the command `!plist` to view your saved internships.
 - This feature is currently under development and will allow users to manage their internship applications effectively.
