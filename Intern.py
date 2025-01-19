@@ -9,15 +9,28 @@ from datetime import datetime
 # Load environment variables from .env file
 load_dotenv()
 
+tracker_messages = {}
+
 # Environment variables
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GITHUB_API_TOKEN = os.getenv("GITHUB_API_TOKEN")  # Optional for GitHub authentication
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # Discord channel to send updates
 
+APPLICATION_STATUSES = {
+    "📝": "Applied",
+    "📞": "Phone Screen",
+    "💻": "Technical Interview",
+    "👥": "On-site/Final Round",
+    "✅": "Offer Received",
+    "❌": "Rejected",
+    "⏳": "Waiting"
+}
+
 REPOSITORIES = [
     "SimplifyJobs/Summer2025-Internships",
 ]
-CHECK_INTERVAL = 60  # Check every 60 seconds
+
+CHECK_INTERVAL = 60
 
 JOB_TYPES = {
     "💻": "SWE",
@@ -26,12 +39,35 @@ JOB_TYPES = {
 
 user_preferences = {}
 previous_shas = {repo: None for repo in REPOSITORIES}
+user_applied_internships = {}
+last_listed_internships = {}
+user_tracked_internships = {}  # New dictionary to store tracked internships with status
 
 intents = discord.Intents.default()
 intents.reactions = True
 intents.messages = True
 intents.message_content = True 
 client = discord.Client(intents=intents)
+
+# Add new function to validate GitHub URL
+def validate_github_url(url):
+    pattern = r"https?://github\.com/[\w-]+/[\w-]+"
+    return bool(re.match(pattern, url))
+
+# Add new function to extract repo path from URL
+def extract_repo_path(url):
+    match = re.search(r"github\.com/([\w-]+/[\w-]+)", url)
+    return match.group(1) if match else None
+
+# Add new function to update tracking status
+async def update_tracking_status(user_id, internship_index, new_status):
+    if user_id not in user_tracked_internships:
+        return False
+    
+    if 0 <= internship_index < len(user_tracked_internships[user_id]):
+        user_tracked_internships[user_id][internship_index]['status'] = new_status
+        return True
+    return False
 
 
 
@@ -236,7 +272,6 @@ async def on_message(message):
                 color=discord.Color.blue()
             )
             
-            # Add number emojis for reactions
             number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
             
             for idx, internship in enumerate(internships, 1):
@@ -254,15 +289,117 @@ async def on_message(message):
                 )
 
             sent_message = await message.channel.send(embed=embed)
-            
-            # Store the internships list for this message
             last_listed_internships[sent_message.id] = internships
             
-            # Add number reactions
             for idx in range(min(len(internships), len(number_emojis))):
                 await sent_message.add_reaction(number_emojis[idx])
         except Exception as e:
             print(f"Error fetching Lists: {e}")
+            await message.channel.send("❌ An error occurred while fetching the internships.")
+
+    elif message.content.startswith("!switch"):
+        parts = message.content.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.channel.send("❌ Please provide a GitHub repository URL: `!switch [GitHub URL]`")
+            return
+        
+        repo_url = parts[1].strip()
+        if not validate_github_url(repo_url):
+            await message.channel.send("❌ Invalid GitHub URL format. Please provide a valid GitHub repository URL.")
+            return
+        
+        repo_path = extract_repo_path(repo_url)
+        if repo_path in REPOSITORIES:
+            await message.channel.send(f"⚠️ Repository {repo_path} is already being tracked!")
+            return
+        
+        REPOSITORIES.append(repo_path)
+        previous_shas[repo_path] = None
+        await message.channel.send(f"✅ Successfully added repository: {repo_path}")
+
+    elif message.content.startswith("!tracker"):
+        user_id = str(message.author.id)
+    
+        if user_id not in user_applied_internships or not user_applied_internships[user_id]:
+            await message.channel.send("🗒️ You haven't added any internships to track yet. Use `!list` to find internships!")
+            return
+
+        # Initialize tracking if not exists
+        if user_id not in user_tracked_internships:
+            user_tracked_internships[user_id] = [
+                {**internship, 'status': 'Applied'} 
+                for internship in user_applied_internships[user_id]
+            ]
+
+        embed = discord.Embed(
+            title="📊 Your Internship Application Tracker",
+            description="React with emojis to update status:\n" + \
+                "\n".join([f"{emoji} - {status}" for emoji, status in APPLICATION_STATUSES.items()]),
+            color=discord.Color.blue()
+        )
+
+        for idx, internship in enumerate(user_tracked_internships[user_id]):
+            status_emoji = next(
+                (emoji for emoji, status in APPLICATION_STATUSES.items() 
+                if status == internship['status']),
+                "📝"
+            )
+            embed.add_field(
+                name=f"{idx + 1}. {internship['company']} {status_emoji}",
+                value=(
+                    f"**Role**: {internship['role']}\n"
+                    f"**Status**: {internship['status']}\n"
+                    f"**Location**: {internship['location']}"
+                ),
+                inline=False
+            )
+
+        tracker_message = await message.channel.send(embed=embed)
+        
+        # Store the tracker message ID and associated user ID
+        tracker_messages[tracker_message.id] = {
+            'user_id': user_id,
+            'internships': user_tracked_internships[user_id]
+        }
+        
+        # Add status reactions
+        for emoji in APPLICATION_STATUSES.keys():
+            await tracker_message.add_reaction(emoji)
+
+    elif message.content.startswith("!stats"):
+        user_id = str(message.author.id)
+        if user_id not in user_tracked_internships or not user_tracked_internships[user_id]:
+            await message.channel.send("No tracking data available yet!")
+            return
+
+        # Calculate statistics
+        status_counts = {}
+        for internship in user_tracked_internships[user_id]:
+            status = internship['status']
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        embed = discord.Embed(
+            title="📊 Your Application Statistics",
+            color=discord.Color.green()
+        )
+
+        total_apps = len(user_tracked_internships[user_id])
+        embed.add_field(
+            name="Total Applications",
+            value=str(total_apps),
+            inline=False
+        )
+
+        for status, count in status_counts.items():
+            percentage = (count / total_apps) * 100
+            embed.add_field(
+                name=status,
+                value=f"{count} ({percentage:.1f}%)",
+                inline=True
+            )
+
+        await message.channel.send(embed=embed)
+
     elif message.content.startswith("!setfilter"):
         await message.channel.send(
             "React with 💻 for SWE updates or 💵 for Finance updates!"
@@ -293,8 +430,23 @@ async def on_message(message):
             inline=False
         )
         embed.add_field(
-            name="📅 `!plist`",
-            value="Show all internships user has applied to",
+            name="📋 `!plist`",
+            value="Show all internships you have applied to.",
+            inline=False
+        )
+        embed.add_field(
+            name="📊 `!tracker`",
+            value="Track the status of your internship applications.",
+            inline=False
+        )
+        embed.add_field(
+            name="🔄 `!switch [GitHub URL]`",
+            value="Add a new GitHub repository to track.",
+            inline=False
+        )
+        embed.add_field(
+            name="📈 `!stats`",
+            value="View statistics about your internship applications.",
             inline=False
         )
         
@@ -318,18 +470,37 @@ async def on_message(message):
         print(f"User's internships: {user_applied_internships[user_id]}")  # Debug
         
         for idx, internship in enumerate(user_applied_internships[user_id], 1):
+            # Get status from tracked internships if available
+            status = "Applied"  # Default status
+            if user_id in user_tracked_internships:
+                tracked_internship = next(
+                    (item for item in user_tracked_internships[user_id] 
+                    if item['company'] == internship['company'] and 
+                        item['role'] == internship['role']),
+                    None
+                )
+                if tracked_internship:
+                    status = tracked_internship['status']
+            
+            # Get status emoji
+            status_emoji = next(
+                (emoji for emoji, stat in APPLICATION_STATUSES.items() 
+                if stat == status),
+                "📝"
+            )
+            
             embed.add_field(
-                name=f"{idx}. {internship['company']}",
+                name=f"{idx}. {internship['company']} {status_emoji}",
                 value=(
                     f"**Role**: {internship['role']}\n"
+                    f"**Status**: {status}\n"
                     f"**Location**: {internship['location']}\n"
-                    f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship['apply_link'] else ''}"
+                    f"{'**[Apply Here]({})**'.format(internship['apply_link']) if internship.get('apply_link') else ''}"
                 ),
                 inline=False
             )
         
-        await message.channel.send(embed=embed)
-
+    await message.channel.send(embed=embed)
 
 @client.event
 async def on_reaction_add(reaction, user):
@@ -339,55 +510,92 @@ async def on_reaction_add(reaction, user):
     message_id = reaction.message.id
     emoji = str(reaction.emoji)
     
-    print(f"\nReaction received - Message ID: {message_id}, Emoji: {emoji}")  # Debug
-    print(f"Available message IDs in last_listed_internships: {list(last_listed_internships.keys())}")  # Debug
-
-    if message_id not in last_listed_internships:
-        print(f"Message ID {message_id} not found in last_listed_internships")  # Debug
+    # Handle tracker reactions
+    if message_id in tracker_messages:
+        if emoji in APPLICATION_STATUSES:
+            tracker_data = tracker_messages[message_id]
+            user_id = tracker_data['user_id']
+            
+            # Only allow the user who created the tracker to update it
+            if str(user.id) != user_id:
+                return
+                
+            embed = reaction.message.embeds[0]
+            
+            try:
+                # Find the internship that was reacted to
+                for field in embed.fields:
+                    field_number = field.name.split('.')[0]
+                    if field_number.isdigit():
+                        idx = int(field_number) - 1
+                        internship = user_tracked_internships[user_id][idx]
+                        new_status = APPLICATION_STATUSES[emoji]
+                        
+                        # Update status in tracked internships
+                        user_tracked_internships[user_id][idx]['status'] = new_status
+                        
+                        # Update status in applied internships
+                        if user_id in user_applied_internships:
+                            matching_internship = next(
+                                (item for item in user_applied_internships[user_id]
+                                 if item['company'] == internship['company'] and
+                                    item['role'] == internship['role']),
+                                None
+                            )
+                            if matching_internship:
+                                matching_internship['status'] = new_status
+                        
+                        # Update the embed field
+                        embed.set_field_at(
+                            idx,
+                            name=f"{field_number}. {internship['company']} {emoji}",
+                            value=(
+                                f"**Role**: {internship['role']}\n"
+                                f"**Status**: {new_status}\n"
+                                f"**Location**: {internship['location']}"
+                            ),
+                            inline=False
+                        )
+                
+                await reaction.message.edit(embed=embed)
+                await user.send(f"✅ Updated status for {internship['company']} to {new_status}")
+                
+            except Exception as e:
+                print(f"Error updating tracker: {e}")
+                await user.send("❌ An error occurred while updating the tracker.")
         return
 
-    internships = last_listed_internships[message_id]
-    print(f"Found internships for message: {internships}")  # Debug
-    
-    emoji_to_index = {
-        "1️⃣": 0, "2️⃣": 1, "3️⃣": 2, "4️⃣": 3, "5️⃣": 4,
-        "6️⃣": 5, "7️⃣": 6, "8️⃣": 7, "9️⃣": 8, "🔟": 9
-    }
-
-    if emoji in emoji_to_index:
-        idx = emoji_to_index[emoji]
-        print(f"Emoji mapped to index: {idx}")  # Debug
+    # Handle existing reactions (keep the rest of the reaction handling code)
+    if message_id in last_listed_internships:
+        internships = last_listed_internships[message_id]
+        emoji_to_index = {
+            "1️⃣": 0, "2️⃣": 1, "3️⃣": 2, "4️⃣": 3, "5️⃣": 4,
+            "6️⃣": 5, "7️⃣": 6, "8️⃣": 7, "9️⃣": 8, "🔟": 9
+        }
         
-        if 0 <= idx < len(internships):
-            internship = internships[idx]
-            user_id = str(user.id)
-            
-            print(f"Processing internship {internship['company']} for user {user_id}")  # Debug
-            print(f"Current user_applied_internships before adding: {user_applied_internships}")  # Debug
-
-            # Initialize user's list if it doesn't exist
-            if user_id not in user_applied_internships:
-                user_applied_internships[user_id] = []
-                print(f"Initialized new list for user {user_id}")  # Debug
-
-            # Check if internship is already in the list
-            existing_internship = next(
-                (item for item in user_applied_internships[user_id] 
-                 if item['company'] == internship['company'] and 
-                    item['role'] == internship['role']),
-                None
-            )
-
-            if not existing_internship:
-                user_applied_internships[user_id].append(internship.copy())  # Make a copy of the internship
-                print(f"Added internship to user's list. Updated data: {user_applied_internships[user_id]}")  # Debug
-                await user.send(f"✅ Added **{internship['company']}** to your applied internships list!")
-            else:
-                print(f"Internship already exists in user's list")  # Debug
-                await user.send(f"⚠️ **{internship['company']}** is already in your list!")
-            
-            print(f"Final user_applied_internships: {user_applied_internships}")  # Debug
-@client.event
+        if emoji in emoji_to_index:
+            idx = emoji_to_index[emoji]
+            if 0 <= idx < len(internships):
+                internship = internships[idx]
+                user_id = str(user.id)
+                
+                if user_id not in user_applied_internships:
+                    user_applied_internships[user_id] = []
+                
+                existing_internship = next(
+                    (item for item in user_applied_internships[user_id] 
+                     if item['company'] == internship['company'] and 
+                        item['role'] == internship['role']),
+                    None
+                )
+                
+                if not existing_internship:
+                    internship_copy = internship.copy()
+                    internship_copy['status'] = 'Applied'  # Add initial status
+                    user_applied_internships[user_id].append(internship_copy)
+                    await user.send(f"✅ Added **{internship['company']}** to your applied internships list!")
+                else:
+                    await user.send(f"⚠️ **{internship['company']}** is already in your list!")@client.event
 async def on_reaction_remove(reaction, user):
     if user.bot:
         return
